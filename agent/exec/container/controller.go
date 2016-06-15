@@ -2,6 +2,7 @@ package container
 
 import (
 	"fmt"
+	"time"
 
 	engineapi "github.com/docker/engine-api/client"
 	"github.com/docker/engine-api/types"
@@ -9,6 +10,7 @@ import (
 	"github.com/docker/swarmkit/agent/exec"
 	"github.com/docker/swarmkit/api"
 	"github.com/docker/swarmkit/log"
+	"github.com/docker/swarmkit/protobuf/ptypes"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
@@ -175,6 +177,8 @@ func (r *controller) Wait(pctx context.Context) error {
 		return err
 	}
 
+	// detect health check result every 3 seconds
+	healthCheckTimer := time.NewTimer(3 * time.Second)
 	for {
 		select {
 		case event := <-eventq:
@@ -194,6 +198,16 @@ func (r *controller) Wait(pctx context.Context) error {
 				// If we get here, something has gone wrong but we want to exit
 				// and report anyways.
 				return ErrContainerDestroyed
+			}
+		case <-healthCheckTimer.C:
+			status, err := r.ContainerStatus(ctx)
+			if err == nil && status.Health.Status == "unhealthy" {
+				// in this case, we stop the container and report unhealthy status
+				if err := r.Shutdown(ctx); err != nil {
+					return errors.Wrap(err, "detect unhealthy container, shutdown failed")
+				}
+				fmt.Println("health check fail")
+				return ErrContainerUnhealthy
 			}
 		case <-closed:
 			// restart!
@@ -362,7 +376,35 @@ func parseContainerStatus(ctnr types.ContainerJSON) (*api.ContainerStatus, error
 		ContainerID: ctnr.ID,
 		PID:         int32(ctnr.State.Pid),
 		ExitCode:    int32(ctnr.State.ExitCode),
+		Health:      parseHealthStatus(ctnr.State.Health),
 	}
 
 	return status, nil
+}
+
+func parseHealthStatus(health *types.Health) *api.HealthStatus {
+	if health == nil {
+		return nil
+	}
+	healthStatus := &api.HealthStatus{
+		Status:        health.Status,
+		FailingStreak: int32(health.FailingStreak),
+	}
+	// now parse the HealthcheckResult log
+	if health.Log != nil {
+		log := []*api.HealthcheckResult{}
+		for _, result := range health.Log {
+			startProto, _ := ptypes.TimestampProto(result.Start)
+			endProto, _ := ptypes.TimestampProto(result.End)
+			newResult := &api.HealthcheckResult{
+				Start:    startProto,
+				End:      endProto,
+				ExitCode: int32(result.ExitCode),
+				Output:   result.Output,
+			}
+			log = append(log, newResult)
+		}
+		healthStatus.Log = log
+	}
+	return healthStatus
 }
