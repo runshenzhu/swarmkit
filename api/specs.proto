@@ -165,6 +165,14 @@ message ContainerSpec {
 	// StopGracePeriod the grace period for stopping the container before
 	// forcefully killing the container.
 	Duration stop_grace_period = 9;
+	HealthConfig HealthCheck = 10;
+}
+
+message HealthConfig {
+	repeated string test = 1;
+	int64 	 interval = 2;
+	int64 	 timeout = 3;
+	int32	 retries = 4;
 }
 
 // EndpointSpec defines the properties that can be configured to

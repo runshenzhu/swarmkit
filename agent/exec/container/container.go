@@ -104,6 +104,16 @@ func (c *containerConfig) config() *enginecontainer.Config {
 		config.Cmd = c.spec().Args
 	}
 
+	healthCheck := c.spec().HealthCheck
+	if healthCheck != nil {
+		config.Healthcheck = &enginecontainer.HealthConfig{
+			Test:     healthCheck.Test,
+			Interval: time.Duration(healthCheck.Interval),
+			Timeout:  time.Duration(healthCheck.Timeout),
+			Retries:  int(healthCheck.Retries),
+		}
+	}
+
 	return config
 }
 
