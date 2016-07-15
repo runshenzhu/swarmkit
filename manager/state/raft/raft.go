@@ -1206,9 +1206,80 @@ func (n *Node) applyRemoveNode(cc raftpb.ConfChange) (err error) {
 	// If the node from where the remove is issued is
 	// a follower and the leader steps down, Campaign
 	// to be the leader.
-	if cc.NodeID == n.Leader() {
+
+	members := n.cluster.Members()
+	if cc.NodeID == n.Leader() && !n.IsLeader() {
 		if err = n.Campaign(n.Ctx); err != nil {
 			return err
+		}
+	} else if cc.NodeID == n.Config.ID && n.IsLeader() && len(members) == 2 {
+		// if there are only 2 nodes in the cluster, and leader is leaving
+		// before closing the connection, leader has to ensure that follower gets
+		// noticed about this raft conf change commit. Otherwise, follower would
+		// assume there are still 2 nodes in the cluster and won't get elected
+		// into the leader by acquiring the majority (2 nodes)
+		//
+		// for safety, it blocks until ack is sent successfully
+
+		status := n.Node.Status()
+		var (
+			conn   *membership.Member
+			peerID uint64
+		)
+
+		// get peer
+		for id, member := range members {
+			if id == n.Config.ID {
+				continue
+			}
+
+			conn = member
+			break
+		}
+
+		if conn == nil {
+			n.Config.Logger.Warningf("when sending leaving commit ack to follower %x, grpc connection is lost", peerID)
+			return n.cluster.RemoveMember(cc.NodeID)
+		}
+
+		// construct msg to inform peer of the commit of raft conf change
+		m := raftpb.Message{Type: raftpb.MsgApp,
+			To: conn.RaftID, From: n.Config.ID, Term: status.Term, LogTerm: status.Term,
+			Index: status.Commit, Commit: status.Commit}
+
+		ctx := context.Background()
+		backoff := 0
+		sleepTime := 10 * time.Millisecond
+		for {
+			tctx, _ := context.WithTimeout(ctx, n.sendTimeout)
+			_, err := conn.ProcessRaftMessage(tctx, &api.ProcessRaftMessageRequest{Message: &m})
+
+			if err == nil {
+				return n.cluster.RemoveMember(cc.NodeID)
+			}
+
+			if err != nil {
+				switch grpc.ErrorDesc(err) {
+				case ErrMemberRemoved.Error():
+					// already removed
+					return n.cluster.RemoveMember(cc.NodeID)
+				case ErrNoRaftMember.Error():
+					// peer is no longer the raft member
+					n.Config.Logger.Warningf("all nodes are removed from cluster")
+					return n.cluster.RemoveMember(cc.NodeID)
+				case grpc.ErrClientConnClosing.Error():
+					if newConn, err := n.ConnectToMember(conn.Addr, n.sendTimeout); err == nil {
+						conn = newConn
+					}
+				default:
+					n.Config.Logger.Warningf("when sending leaving commit ack to follower %x, getting the error %v. retry", peerID, err)
+				}
+			}
+			time.Sleep(sleepTime)
+			if backoff < 10 {
+				backoff++
+				sleepTime *= 2
+			}
 		}
 	}
 
