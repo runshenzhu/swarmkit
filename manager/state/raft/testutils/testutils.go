@@ -72,7 +72,7 @@ func PollFunc(clockSource *fakeclock.FakeClock, f func() error) error {
 }
 
 // WaitForCluster waits until leader will be one of specified nodes
-func WaitForCluster(t *testing.T, clockSource *fakeclock.FakeClock, nodes map[uint64]*TestNode) {
+func WaitForCluster(t *testing.T, clockSource *fakeclock.FakeClock, nodes map[uint64]*TestNode) error {
 	err := PollFunc(clockSource, func() error {
 		var prev *etcdraft.Status
 	nodeLoop:
@@ -101,7 +101,7 @@ func WaitForCluster(t *testing.T, clockSource *fakeclock.FakeClock, nodes map[ui
 		}
 		return nil
 	})
-	require.NoError(t, err)
+	return err
 }
 
 // WaitForPeerNumber waits until peers in cluster converge to specified number
