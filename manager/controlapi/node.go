@@ -273,7 +273,7 @@ func (s *Server) RemoveNode(ctx context.Context, request *api.RemoveNodeRequest)
 		if node == nil {
 			return grpc.Errorf(codes.NotFound, "node %s not found", request.NodeID)
 		}
-		if node.Spec.Role == api.NodeRoleManager {
+		if node.Spec.Role == api.NodeRoleManager && node.Status.State != api.NodeStatus_DOWN {
 			return grpc.Errorf(codes.FailedPrecondition, "node %s role is set to manager. It should be demoted to worker for safe removal", request.NodeID)
 		}
 		if node.Status.State == api.NodeStatus_READY {
